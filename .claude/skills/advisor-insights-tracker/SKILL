@@ -1,0 +1,133 @@
+--
+name: advisor-insights-tracker
+description: >-
+  Extract weekly advisor / meeting notes from the bound CMoney advisor Google Doc into a
+  ready-to-paste Google Sheets row set, in the fixed 6-column format
+  (Session · 日期 · Key Insight (1句話) · Detail / Verbatim · Action Item · Status).
+  ALWAYS use this skill whenever the user asks to "summarize this week's meeting", "prepare the
+  rows for the sheet", "update the tracker", "digest the advisor notes", "package the doc for the
+  spreadsheet", or anything similar — even if they don't name the format. The defining behaviour:
+  only the meeting session(s) whose date is within +/- 4 days of the run date are read and digested;
+  every other session in the doc is ignored. Output is a styled .xlsx the user copies straight into
+  their Google Sheet.
+---
+
+# Advisor Insights Tracker
+
+This skill turns the user's weekly advisor-meeting notes into a clean, copy-paste-ready
+spreadsheet, **but only for the session that matches the current week**. The user runs it once a
+week; it must look at *today's* date and digest only the session dated within ±4 days of today.
+
+## Bound source document
+
+The notes live in one Google Doc that the user keeps adding to, one section per weekly meeting:
+
+- **Doc ID:** `1wE0_p15n3YlZboQRt_c7bUs3yq7B3hLA1NSCCGmZxk8`
+- **URL:** https://docs.google.com/document/d/1wE0_p15n3YlZboQRt_c7bUs3yq7B3hLA1NSCCGmZxk8/edit
+
+Each meeting section starts with a heading like `# 6/11` followed by a full date line such as
+`## 2026年6月11日 | CMoney Overseas Data Advisory Sync`. Parse the full `YYYY年M月D日` line for the
+authoritative date (it carries the year). Treat everything from one such heading up to the next
+weekly heading as that session's content.
+
+## Step 1 — Establish the run date
+
+Use **today's actual date** as the run date unless the user explicitly says they are running it
+"as of" another date — in that case honour the date they give. State the run date you are using so
+the user can see it.
+
+## Step 2 — Get the doc content
+
+In priority order:
+
+1. If the doc content is already present in the conversation, use it.
+2. Otherwise read it through the Google Drive connector — call the Drive `read_file_content` tool
+   with the Doc ID above. If the connector isn't enabled, say so plainly and ask the user to enable
+   the Google Drive connector or paste the doc text. Do not guess the contents.
+
+## Step 3 — Apply the ±4-day window (the core rule)
+
+The window is **inclusive on both ends**:
+
+```
+run_date − 4 days  ≤  session_date  ≤  run_date + 4 days
+```
+
+So running on **6/12** digests sessions dated **6/8 through 6/16** only. A session dated 6/11 is in;
+6/4 and 6/18 are out. Run the helper to avoid arithmetic slips — give it the run date and every
+session date you found in the doc:
+
+```bash
+python scripts/window_check.py --run 2026-06-12 --dates 2026-05-28,2026-06-04,2026-06-11
+# -> included: 2026-06-11 ; excluded: the rest
+```
+
+(Omit `--run` to use today automatically.) **Read and digest only the `included` sessions.** Ignore
+every excluded session entirely — do not pull rows, status, or cross-references from them.
+
+If **no** session falls in the window, do not invent rows. Tell the user plainly that no meeting in
+the doc is dated within ±4 days of the run date, show the window bounds and the dates you saw, and
+stop (no file). Offer to run for a specific date if they want a past week.
+
+## Step 4 — Extract rows (one row per insight)
+
+For each in-window session, produce one row per distinct insight, in this exact column order:
+
+| Column | What goes in it |
+| --- | --- |
+| Session | The session tag from the heading, e.g. `#3` (or `#1`, `#2`…). If the doc numbers them, reuse that number; otherwise number in date order. |
+| 日期 | The session date as `YYYY/M/D`. |
+| Key Insight (1句話) | One sentence: the single takeaway / Karen's point. No semicolons-as-lists; keep it to one idea. |
+| Detail / Verbatim | The supporting detail, example, or near-verbatim reasoning behind the insight. 1–3 sentences. Preserve concrete specifics (names, numbers, firms). |
+| Action Item | The concrete next action for the team. If the note has no action, write `—`. |
+| Status | Derive from the session's own text: `Done`, `In progress`, `Ongoing`, `Open`, `Decided`, `To confirm`, `Deprioritized`, `Pending`. Use the closed-loop / decisions / to-do tables in that same session as the source of truth. |
+
+Extraction guidance:
+
+- Mine the session's **summary table**, **observations/suggestions**, **decisions**, and
+  **to-do / action-item** tables. Each summary-table point and each action item generally becomes
+  its own row so it can be tracked individually.
+- Keep numbers and named entities the notes flagged as uncertain marked as written. If the note says
+  `[to confirm]` / `待確認`, set Status to `To confirm` and keep the figure in Detail rather than
+  asserting it as fact.
+- Do not fabricate a Status the note doesn't support. When a session lists only forward actions with
+  no completion signal, `Open` or `Ongoing` is the honest default.
+- Aim for roughly 12–18 rows per session — enough to be faithful, not so granular that trivial tweaks
+  each get a line.
+
+Write the rows to a JSON file (a list of 6-string lists) for the builder, e.g. `rows.json`:
+
+```json
+[
+  ["#3", "2026/6/11", "Keep the NDA late in the sales flow", "Buy-side legal/compliance is the bottleneck (~3 lawyers / ~100 investment staff; an alt-data NDA ~4 weeks); front-load value first.", "Keep NDA late; front-load case-study + overview package", "Decided"]
+]
+```
+
+## Step 5 — Build the spreadsheet
+
+```bash
+pip install openpyxl --break-system-packages -q
+python scripts/build_tracker.py --rows rows.json \
+  --out /mnt/user-data/outputs/Advisor_Insights_<RUNDATE>.xlsx \
+  --title "Advisor Insights <RUNDATE>"
+```
+
+The builder applies the fixed styling (dark header row, per-session colour tint, wrapped Detail
+cells, set column widths, frozen header). Don't restyle by hand — the script keeps every weekly run
+identical and makes the rows paste cleanly into Google Sheets.
+
+## Step 6 — Hand it over
+
+Call `present_files` with the .xlsx path. Then, briefly:
+
+- State the run date and the window you applied (e.g. "Run 6/12 → digested the 6/11 session; 5/28 and
+  6/4 were outside ±4 days").
+- Note that Status is derived, not authoritative, and any `[to confirm]` figures should be checked.
+- Remind the user they paste the rows into their Google Sheet (or File → Import). Keep it short.
+
+## How the user uses the result
+
+The output is a separate workbook, not their live tracker. They open it, copy the data rows, and
+paste into their Google Sheet — Claude can read the doc and prepare rows, but writes into the user's
+existing sheet are done by the user via paste (the Drive connector here reads and creates files; it
+does not edit specific cells of an existing sheet in place).
