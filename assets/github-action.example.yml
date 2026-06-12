@@ -1,0 +1,37 @@
+# Example: run the gdoc-meeting-summary skill automatically with Claude Code.
+#
+# Copy to .github/workflows/meeting-summary.yml in your repo.
+# Prereqs:
+#   - This skill committed at .claude/skills/gdoc-meeting-summary/
+#   - .mcp.json at repo root (see assets/mcp.json.example) using ${COMPOSIO_CONSUMER_KEY}
+#   - Repo secrets: ANTHROPIC_API_KEY, COMPOSIO_CONSUMER_KEY
+#   - The target Google account already connected in Composio (one-time OAuth)
+
+name: Meeting Summary
+
+on:
+  workflow_dispatch:
+    inputs:
+      doc_url:
+        description: "Google Doc URL or document ID of the transcript"
+        required: true
+  # Or run on a schedule, e.g. every weekday at 09:00 UTC:
+  # schedule:
+  #   - cron: "0 9 * * 1-5"
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      COMPOSIO_CONSUMER_KEY: ${{ secrets.COMPOSIO_CONSUMER_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Summarize the transcript into a new tab
+        run: |
+          claude -p "Use the gdoc-meeting-summary skill to summarize this Google Doc into a new tab: ${{ github.event.inputs.doc_url }}" \
+            --permission-mode acceptEdits
