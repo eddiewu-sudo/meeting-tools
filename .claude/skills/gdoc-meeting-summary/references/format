@@ -1,0 +1,81 @@
+# Bilingual meeting-summary format
+
+Produce the **full report in English, then the full report in 繁體中文**, at
+*identical structure and equal detail*. Every section, bullet, and table row that
+appears in one language appears in the other. English first, then a divider, then
+Chinese. Render everything as Markdown.
+
+## Processing rules (what makes it useful)
+- **Read the whole transcript first.** Identify attendees, topic, date.
+- **Tag substance, drop filler.** Keep questions, data points/metrics, discussion
+  points, decisions, and action items. Cut greetings, scheduling chatter, "嗯/啊/
+  就是說/那個" and English filler.
+- **Stay neutral on identity.** Refer to people by name or by what they did (the
+  host, the presenter, a participant, the other party). Never label anyone a
+  "customer"/"client" or frame it "us vs. them" unless the transcript explicitly
+  says so. This works for internal syncs, trainings, partner, and client calls
+  alike — let the reader infer roles.
+- **Preserve specifics exactly.** Names, figures, %, amounts, dates, deadlines,
+  and technical terms stay verbatim. If a number wasn't stated, don't supply one.
+- **Mark uncertainty, don't smooth it.** Flag ambiguous or likely mis-heard
+  content with `[待確認]` / `[to confirm]`. If you fix an obvious transcription
+  error from context, mark it `[*]`.
+- **Owner column stays blank** in the To-Do table — the user fills it in.
+- **Quote sparingly** — only a short, load-bearing line.
+- **Never fabricate or extend.** Organize only what's in the input.
+
+## Section order (use in BOTH languages, identical)
+1. **Basic Information / 基本資訊** — Date / 日期, Attendees / 與會人員, Topic / 主題
+   (and meeting type / 會議性質 only if obvious). Use "待補 / TBD" for anything
+   not stated.
+2. **Summary / 摘要** — 3–5 sentences on purpose, main progress, and conclusion.
+3. **Q&A Recap / 問答彙整** — questions raised and the responses given. Attribute
+   neutrally. Mark open items (e.g. "To confirm / 待確認").
+4. **Key Data & Metrics / 關鍵數據與指標** — every concrete number (amounts, %,
+   dates, performance figures, market size). Keep exact; never invent.
+5. **Discussion Points / 討論重點** — organized by theme, each with a sub-heading.
+   Convert speech to concise written prose.
+6. **Decisions / 決議事項** — consensus reached, policy changes, final calls.
+7. **To-Do & Ownership / 待辦事項與分工** — our action items (table below).
+8. **Commitments from Others / 對方承諾事項** — things people outside our own team
+   said they'd do/deliver for us. Attribute by name/role, neutrally. Include form
+   and timing/status. Omit the section only if no such commitment was made.
+9. **Next Meeting / 下次會議規劃** — time, expected topics, attendees — only if
+   mentioned; otherwise "未提及 / Not mentioned."
+
+## To-Do & Ownership table (Owner column blank)
+
+English:
+```
+| Topic / Detail | Action | Format | Owner |
+|----------------|--------|--------|-------|
+| [topic + the key point raised] | [the action] | [doc / slides / email / data sample…] | |
+```
+繁體中文:
+```
+| 主題／內容 | 你要做的事 | 形式 | 負責 |
+|-----------|-----------|------|------|
+| [主題＋當下提出的重點] | [對應要做的事] | [文件／簡報／Email／數據樣本…] | |
+```
+One-line note under each table:
+*Owner left blank for manual input (Team A / Team B / Both). / 負責欄留空，請自行填入（Team A／Team B／兩者）。*
+
+## Commitments from Others table
+
+English:
+```
+| Deliverable / Commitment | Promised by | Form | Expected timing / status |
+|--------------------------|-------------|------|--------------------------|
+| [what they said they'd provide/do] | [name or role] | [doc / data / intro / email…] | [date, "TBD," or status] |
+```
+繁體中文:
+```
+| 承諾事項／交付 | 承諾者 | 形式 | 預計時間／狀態 |
+|---------------|--------|------|----------------|
+| [對方表示會提供或處理的事項] | [姓名或角色] | [文件／資料／引薦／Email…] | [日期、「待補」或狀態] |
+```
+
+## Language divider
+Between the English and Chinese halves, emit a clear divider so the switch is
+obvious in the rendered doc, e.g. a line of `---` (a horizontal rule) followed by
+the Chinese H1 title. Keep the two halves in one `markdown_text` payload.
