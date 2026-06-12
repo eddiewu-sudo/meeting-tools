@@ -1,0 +1,128 @@
+---
+name: gdoc-meeting-summary
+description: >-
+  Read a meeting transcript that lives in a Google Doc, write a clean bilingual
+  (English + 繁體中文) meeting summary, and place that summary into a NEW TAB of
+  the same Google Doc — without touching the original transcript. Uses the
+  Composio MCP gateway's Google Docs toolkit (no raw Google credentials needed).
+  Use this skill whenever the user shares a Google Docs link (or document ID)
+  and asks to "summarize this transcript", "create another tab and summarize it",
+  "整理這份逐字稿", "make a meeting summary in the doc", "digest this call into a
+  new tab", or anything similar — even if they don't say the word "tab" or
+  "bilingual". Trigger it for any request to summarize / clean up / write up the
+  contents of a Google Doc into the same doc. Do NOT use it for local .docx/.txt
+  files (use a plain meeting-summary approach) or for Google Docs that are NOT
+  meeting transcripts/notes.
+---
+
+# Google Doc Meeting Summary → New Tab
+
+This skill turns a transcript that already lives in a Google Doc into a polished,
+**bilingual** meeting record and drops it into a **new tab** in that same doc, so
+the raw transcript and the summary live side by side. It runs entirely through the
+**Composio MCP** Google Docs toolkit, so it works in any session — local or
+headless/CI — as long as Composio is connected (see `references/setup.md`).
+
+## Why a tab (not a separate file)
+Keeping the summary in the same document means the reader opens one link and finds
+both the source and the digest. The Google Docs API can create tabs via
+`batchUpdate` (`addDocumentTab`), so this is a clean, native result — no second
+file to manage, no broken links.
+
+## Prerequisites (check first)
+1. **Composio MCP is connected** and the **googledocs** toolkit shows an *active*
+   connection. If you're unsure, run the connection check in Step 0.
+2. **The Composio tools are loaded into the session.** In a fresh session the
+   `mcp__composio__*` tools are *deferred* — load them with ToolSearch before use:
+   `ToolSearch("composio")`, or `select:` the specific ones listed below.
+3. If Composio is not connected at all, follow `references/setup.md` (one-time
+   `claude mcp add …`, or a committed `.mcp.json` for repos/automation).
+
+The tools you'll actually call (all via the meta-executor):
+- `mcp__composio__COMPOSIO_SEARCH_TOOLS` — start a session, confirm the connection
+- `mcp__composio__COMPOSIO_MANAGE_CONNECTIONS` — list/add the googledocs connection
+- `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` — run the actual Google Docs tools
+- `mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS` — fetch a tool's exact arg schema if needed
+
+The underlying Google Docs tool slugs (run *inside* `COMPOSIO_MULTI_EXECUTE_TOOL`):
+`GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT`, `GOOGLEDOCS_UPDATE_EXISTING_DOCUMENT`,
+`GOOGLEDOCS_UPDATE_DOCUMENT_SECTION_MARKDOWN`.
+Full call shapes + known pitfalls are in `references/composio-google-docs.md` —
+read it before your first tool call so you don't burn retries on arg-shape errors.
+
+## Inputs
+- A **Google Doc URL or document ID** (the tools accept either).
+- Optional: a desired **tab title** (default: `Meeting Summary｜會議摘要`).
+
+If the user hasn't given a doc, ask for the link before doing anything.
+
+## Workflow
+
+### Step 0 — Confirm the connection (cheap, do it once)
+Call `COMPOSIO_SEARCH_TOOLS` with `session: { generate_id: true }` and a use_case
+like "read and update a google doc". The response's
+`toolkit_connection_statuses` tells you whether googledocs is active. **Save the
+returned `session.id`** and pass it to every later Composio call. If no active
+connection, see `references/setup.md`.
+
+### Step 1 — Read the transcript
+Run `GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT` (via `COMPOSIO_MULTI_EXECUTE_TOOL`) with
+the document id. The transcript can be long; if the inline preview looks
+truncated, set `sync_response_to_workbench: true` and read it from there.
+Read the *whole* thing before summarizing — the value is in catching every
+question, number, and commitment, not skimming.
+
+### Step 2 — Write the bilingual summary
+Follow `references/format.md` exactly. Non-negotiables that make this useful:
+- **Full English report, then the full 繁體中文 report, at identical depth** — same
+  sections, same number of bullets/rows. Neither language is a summary of the
+  other.
+- **Stay neutral about identities.** Refer to people by name or by what they did
+  (the host, the presenter, a participant). Do not label anyone "customer" or
+  "client" or frame it as "us vs. them" unless the transcript explicitly does.
+- **Preserve specifics exactly** — names, figures, dates, %; never invent a
+  number. Flag anything ambiguous or likely mis-heard with `[待確認]` /
+  `[to confirm]`.
+- **Leave the To-Do "Owner / 負責" column blank** for the user to fill in.
+- Render the summary as **Markdown** (headings, bullets, tables) — the writer tool
+  converts Markdown to real Google Docs formatting.
+
+### Step 3 — Create the new tab
+Call `GOOGLEDOCS_UPDATE_EXISTING_DOCUMENT` with one `addDocumentTab` request and
+the desired title. **Capture the returned `tabProperties.tabId`** from
+`replies[0]` — you need it to target the write. Exact shape is in the reference.
+
+### Step 4 — Write the summary into that tab
+Call `GOOGLEDOCS_UPDATE_DOCUMENT_SECTION_MARKDOWN` with `tab_id` set to the new
+tab and `markdown_text` set to the full bilingual report. **Omit `start_index`**
+so it appends inside that tab. (Large markdown is auto-chunked.) Separate the
+English and Chinese halves with a divider so the language switch is obvious.
+
+### Step 5 — Verify
+Call `GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT` with `include_tabs_content: true` and
+`tab_ids: ["<new tab id>"]`. Confirm the report text is present in the *new* tab
+and that the original transcript tab is untouched. Then give the user the doc link
+and tell them which tab to open.
+
+## Output to the user
+A short confirmation with: the new tab's title, a one-line note of what's inside
+(the 9 sections + the two tables), the doc link, and a reminder to (a) fill in the
+blank Owner column and (b) verify any `[待確認]` values against the recording.
+
+## Common failure modes (and the fix)
+- **`401 Invalid API key` from the Python SDK** — the `ck_…` consumer key only
+  authenticates the *MCP gateway*, not the core REST SDK. This skill uses the MCP
+  gateway, so just make sure the MCP server is connected; don't try to drive it
+  with the Python `Composio(api_key=…)` client.
+- **Content landed in the wrong tab** — you omitted `tab_id`, so it went to the
+  first tab. Re-read with `GET_DOCUMENT_BY_ID`, delete the misplaced span with
+  `GOOGLEDOCS_DELETE_CONTENT_RANGE`, and rewrite with `tab_id` set.
+- **`addDocumentTab` HTTP 400 "Unknown name"** — the request shape is sensitive;
+  use the exact shape in `references/composio-google-docs.md`.
+- **Tools "don't exist"** — they're deferred; load them with ToolSearch first.
+
+## Reference files
+- `references/setup.md` — connect Composio once; `.mcp.json` for repos & headless/CI runs.
+- `references/composio-google-docs.md` — exact tool call shapes, arg aliases, pitfalls.
+- `references/format.md` — the bilingual report template and the two tables.
+- `assets/mcp.json.example` — drop-in project-scoped MCP config (reads the key from env).
