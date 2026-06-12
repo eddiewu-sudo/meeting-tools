@@ -1,0 +1,93 @@
+# Setup — connecting the Composio Google Docs gateway
+
+This skill talks to Google Docs through the **Composio MCP gateway**. You never
+handle Google OAuth or Google API keys directly — Composio holds the connected
+Google account, and you authenticate to Composio with a single header key.
+
+There are two ways to wire it up: interactive (one machine) or committed config
+(repos / headless / CI). Use whichever matches how you'll run the skill.
+
+---
+
+## A. Interactive setup (one machine, run once)
+
+Add the MCP server at **user scope** so it's available in every project:
+
+```bash
+claude mcp add --scope user --transport http composio https://connect.composio.dev/mcp \
+  --header "x-consumer-api-key: <YOUR_COMPOSIO_CONSUMER_KEY>"
+```
+
+- The consumer key looks like `ck_…`. It authenticates the **gateway**, not the
+  core REST API — do not confuse it with a core API key (`ak_…`), which is for the
+  Python/JS SDK and will NOT work here.
+- Verify health:
+  ```bash
+  claude mcp list
+  # composio: https://connect.composio.dev/mcp (HTTP) - ✓ Connected
+  ```
+- If it says **"Needs authentication"**, the key is missing/invalid — re-add with
+  the header, or run `/mcp` in an interactive session to complete OAuth.
+
+The config is written to `~/.claude.json`. **The key is stored in plaintext** —
+protect that file and rotate the key in the Composio dashboard if it ever leaks.
+
+---
+
+## B. Committed config for repos / headless / automation
+
+To run this skill automatically (GitHub Actions, cron, `claude -p …`), commit a
+`.mcp.json` at the repo root and inject the key from an environment variable so it
+never lands in git. A ready template is in `../assets/mcp.json.example`:
+
+```json
+{
+  "mcpServers": {
+    "composio": {
+      "url": "https://connect.composio.dev/mcp",
+      "headers": { "x-consumer-api-key": "${COMPOSIO_CONSUMER_KEY}" }
+    }
+  }
+}
+```
+
+Then provide the secret at runtime:
+
+```bash
+export COMPOSIO_CONSUMER_KEY=ck_xxx        # locally, or a CI secret
+claude -p "Summarize https://docs.google.com/document/d/<DOC_ID>/edit into a new tab"
+```
+
+In GitHub Actions, store `COMPOSIO_CONSUMER_KEY` as a repository secret and expose
+it via `env:` on the step that runs Claude. Never hard-code `ck_…` in the repo.
+
+> Env-var expansion in `.mcp.json` (`${VAR}`) is supported by Claude Code. If your
+> runner doesn't expand it, render the file from a template before launching.
+
+---
+
+## C. Connecting a Google account to Composio (one-time, per Google identity)
+
+The gateway needs at least one **active googledocs connection**. To check or add
+one from inside a session, use the meta-tools:
+
+- **List** existing connections (no side effects):
+  `COMPOSIO_MANAGE_CONNECTIONS` with `toolkits: [{ name: "googledocs", action: "list" }]`
+- **Add** a connection (returns an OAuth `redirect_url` to open in a browser):
+  `COMPOSIO_MANAGE_CONNECTIONS` with `toolkits: [{ name: "googledocs", action: "add" }]`,
+  then `COMPOSIO_WAIT_FOR_CONNECTIONS` until it reports active.
+
+For unattended automation, make sure the Google account is connected **ahead of
+time** (a human completes the OAuth once); the skill itself should then find an
+active connection and never need a browser.
+
+---
+
+## Quick triage
+
+| Symptom | Cause | Fix |
+|--------|-------|-----|
+| `claude mcp list` → "Needs authentication" | missing/invalid `x-consumer-api-key` | re-add with the header (A) |
+| `401 Invalid API key` | used a core `ak_…` key or the Python SDK | use the MCP gateway + `ck_…` key |
+| tool calls say tool doesn't exist | deferred MCP tools not loaded | `ToolSearch("composio")` first |
+| `has_active_connection: false` | no Google account linked | `COMPOSIO_MANAGE_CONNECTIONS` add (C) |
