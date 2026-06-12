@@ -1,0 +1,74 @@
+# gdoc-meeting-summary
+
+A Claude Code **skill** that reads a meeting transcript living in a Google Doc and
+writes a clean, **bilingual (English + 繁體中文)** meeting summary into a **new tab**
+of the same doc — leaving the original transcript untouched.
+
+It works through the **Composio MCP gateway**, so no raw Google credentials are
+needed; Composio holds the connected Google account.
+
+## What it does
+1. Reads the transcript from the Google Doc.
+2. Generates a full bilingual summary (9 sections + a To-Do table and a
+   Commitments table), neutral about identities, with uncertain values flagged
+   `[待確認]`.
+3. Creates a new tab and writes the summary into it.
+4. Verifies the content landed in the new tab.
+
+## Install (local)
+Copy this folder to your skills directory:
+
+```
+~/.claude/skills/gdoc-meeting-summary/      # macOS/Linux
+%USERPROFILE%\.claude\skills\gdoc-meeting-summary\   # Windows
+```
+
+Then connect Composio once (see `references/setup.md`):
+
+```bash
+claude mcp add --scope user --transport http composio https://connect.composio.dev/mcp \
+  --header "x-consumer-api-key: <YOUR_COMPOSIO_CONSUMER_KEY>"
+claude mcp list   # expect: composio … ✓ Connected
+```
+
+Make sure a **googledocs** connection is active in Composio (one-time OAuth).
+
+## Use
+In any session, just point Claude at a doc:
+
+> Summarize https://docs.google.com/document/d/<DOC_ID>/edit into a new tab
+
+The skill triggers automatically on requests like "summarize this transcript",
+"create another tab and summarize it", or "整理這份逐字稿".
+
+## Install (repo / team)
+Commit this folder under your repo at `.claude/skills/gdoc-meeting-summary/` and a
+`.mcp.json` at the repo root (template in `assets/mcp.json.example`). Provide the
+Composio key via the `COMPOSIO_CONSUMER_KEY` environment variable — never commit
+the key.
+
+## Run automatically (CI / cron)
+See `assets/github-action.example.yml` for a GitHub Actions workflow that runs the
+skill headlessly with `claude -p`. Store the key as the repo secret
+`COMPOSIO_CONSUMER_KEY`. The target Google account must already be connected in
+Composio (do the OAuth once, ahead of time).
+
+## Files
+```
+gdoc-meeting-summary/
+├── SKILL.md                         # the skill (orchestration)
+├── README.md                        # this file
+├── references/
+│   ├── setup.md                     # connect Composio; .mcp.json; headless/CI
+│   ├── composio-google-docs.md      # exact tool call shapes + pitfalls
+│   └── format.md                    # the bilingual report template
+└── assets/
+    ├── mcp.json.example             # drop-in project MCP config (key from env)
+    └── github-action.example.yml    # sample automated run
+```
+
+## Security
+The Composio consumer key (`ck_…`) authenticates the gateway and is sensitive.
+Keep it in an env var / CI secret, never in git, and rotate it in the Composio
+dashboard if it leaks. Note: a core SDK key (`ak_…`) is a *different* credential
+and won't work with this gateway.
