@@ -1,0 +1,165 @@
+# Composio → Google Docs: exact call shapes & pitfalls
+
+All Google Docs actions run **inside** `COMPOSIO_MULTI_EXECUTE_TOOL`. The
+meta-tools (`COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_MANAGE_CONNECTIONS`,
+`COMPOSIO_MULTI_EXECUTE_TOOL`, `COMPOSIO_GET_TOOL_SCHEMAS`) are MCP tools named
+`mcp__composio__<NAME>`. In a fresh session they are **deferred** — load them with
+`ToolSearch("composio")` (or `select:mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL,…`)
+before calling.
+
+Pass the **same `session_id`** (returned by the first `COMPOSIO_SEARCH_TOOLS`
+call) to every subsequent Composio call.
+
+## Table of contents
+1. Step 0 — confirm connection
+2. Step 1 — read transcript (`GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT`)
+3. Step 3 — create a tab (`GOOGLEDOCS_UPDATE_EXISTING_DOCUMENT` / `addDocumentTab`)
+4. Step 4 — write into the tab (`GOOGLEDOCS_UPDATE_DOCUMENT_SECTION_MARKDOWN`)
+5. Step 5 — verify (`GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT` with tabs)
+6. Repair tools (if something lands wrong)
+7. Pitfalls cheat-sheet
+
+---
+
+## 1. Step 0 — confirm connection
+`mcp__composio__COMPOSIO_SEARCH_TOOLS`:
+```json
+{
+  "queries": [{ "use_case": "read and update a google doc by document id" }],
+  "session": { "generate_id": true }
+}
+```
+Read `toolkit_connection_statuses[].has_active_connection` for `googledocs`, and
+**save `session.id`** from the response. If not connected, see `setup.md`
+(or `COMPOSIO_MANAGE_CONNECTIONS` with `action:"list"` / `"add"`).
+
+---
+
+## 2. Step 1 — read the transcript
+`mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL`:
+```json
+{
+  "session_id": "<from step 0>",
+  "current_step": "READING_DOCUMENT",
+  "sync_response_to_workbench": false,
+  "tools": [
+    {
+      "tool_slug": "GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT",
+      "arguments": { "document_id": "<DOC_ID_OR_URL>" }
+    }
+  ]
+}
+```
+- `document_id` accepts a bare ID **or** a full `/document/d/<id>/edit` URL.
+- If the doc is huge / preview looks cut off, set `sync_response_to_workbench: true`.
+- Optional flags: `include_tables` (default true), `include_tabs_content`,
+  `include_headers`, `include_footers`.
+
+---
+
+## 3. Step 3 — create a new tab
+`GOOGLEDOCS_UPDATE_EXISTING_DOCUMENT` runs the Docs `batchUpdate`. Use exactly this
+shape (the field is `edit_docs`, each entry has exactly ONE request type):
+```json
+{
+  "session_id": "<id>",
+  "current_step": "CREATING_TAB",
+  "sync_response_to_workbench": false,
+  "tools": [
+    {
+      "tool_slug": "GOOGLEDOCS_UPDATE_EXISTING_DOCUMENT",
+      "arguments": {
+        "document_id": "<DOC_ID>",
+        "edit_docs": [
+          { "addDocumentTab": { "tabProperties": { "title": "Meeting Summary｜會議摘要" } } }
+        ]
+      }
+    }
+  ]
+}
+```
+The response returns the new tab id at:
+`results[0].response.data.replies[0].addDocumentTab.tabProperties.tabId`
+(looks like `t.xxxxxxxx`). **Save it.**
+
+> To control ordering, add `"index": <n>` inside `tabProperties` (0 = first tab).
+> To rename later, use an `updateDocumentTabProperties` request targeting the tabId.
+
+---
+
+## 4. Step 4 — write the summary into the tab
+`GOOGLEDOCS_UPDATE_DOCUMENT_SECTION_MARKDOWN` renders Markdown to real Docs
+formatting. Target the tab and **omit `start_index`** to append inside it:
+```json
+{
+  "session_id": "<id>",
+  "current_step": "WRITING_SUMMARY_TO_TAB",
+  "sync_response_to_workbench": false,
+  "tools": [
+    {
+      "tool_slug": "GOOGLEDOCS_UPDATE_DOCUMENT_SECTION_MARKDOWN",
+      "arguments": {
+        "document_id": "<DOC_ID>",
+        "tab_id": "<NEW_TAB_ID>",
+        "markdown_text": "# Meeting Summary …\n\n## 1. Basic Information\n…"
+      }
+    }
+  ]
+}
+```
+- Supports `#`/`##` headings, `-` bullets, `**bold**`, and GitHub-style tables.
+- Large content is auto-split into batches — one call is fine even for a long
+  bilingual report.
+- A note like *"start_index was not provided … appended at position 1"* is normal
+  and means it appended to the targeted segment.
+- If you must overwrite an existing range, pass `start_index` (1-based UTF-16) and
+  optional `end_index` from `GOOGLEDOCS_GET_DOCUMENT_BY_ID`; do NOT include the
+  segment's final trailing newline in `end_index`.
+
+---
+
+## 5. Step 5 — verify it landed in the right tab
+```json
+{
+  "session_id": "<id>",
+  "current_step": "VERIFYING_TAB",
+  "sync_response_to_workbench": false,
+  "tools": [
+    {
+      "tool_slug": "GOOGLEDOCS_GET_DOCUMENT_PLAINTEXT",
+      "arguments": {
+        "document_id": "<DOC_ID>",
+        "include_tabs_content": true,
+        "tab_ids": ["<NEW_TAB_ID>"]
+      }
+    }
+  ]
+}
+```
+The output is prefixed with `--- TAB: <title> (<tabId>) ---`; confirm your report
+text is under the **new** tab and the transcript tab is unchanged.
+
+---
+
+## 6. Repair tools (only if something lands wrong)
+- `GOOGLEDOCS_GET_DOCUMENT_BY_ID` (arg is `id`, with `includeTabsContent: true`) —
+  inspect structure / find indices and the per-tab `tabProperties.tabId`.
+- `GOOGLEDOCS_DELETE_CONTENT_RANGE` — remove a misplaced span (provide the nested
+  `range` object; never include the final segment newline).
+- Re-run Step 4 with the correct `tab_id`.
+
+---
+
+## 7. Pitfalls cheat-sheet
+- **Deferred tools**: load `mcp__composio__*` via ToolSearch before first use.
+- **Wrong key type**: the gateway uses an `x-consumer-api-key` (`ck_…`). A core
+  SDK key (`ak_…`) gives `401 Invalid API key` — it's for the Python/JS SDK, not
+  this gateway.
+- **`addDocumentTab` 400 "Unknown name"**: keep the exact `edit_docs` →
+  `addDocumentTab` → `tabProperties` nesting; don't add unknown fields.
+- **Content in the wrong tab**: you forgot `tab_id` (defaults to the first tab).
+- **Empty `replies[]` objects**: many request types return empty replies on
+  success — confirm via a read (Step 5), not by inspecting replies.
+- **Arg aliases** (handy if a call rejects a name): `document_id` also accepts
+  `id`/`doc_id`/`documentId`; `markdown_text` also accepts
+  `markdown`/`content`/`text`.
